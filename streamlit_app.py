@@ -509,10 +509,20 @@ if IS_OPERATIVA:
                         display_cols = ['Ticker', 'Score_Compuesto', 'Sharpe', 'Alpha (%)', 'EBITDA_Margin', 'Volatilidad (%)']
                         avail_cols = [c for c in display_cols if c in sel_data['scores'].columns]
                         df_show = sel_data['scores'][avail_cols].head(15).copy()
+                        df_show = df_show.merge(
+                            DF_UNIVERSO[['ticker', 'name']].rename(columns={'ticker': 'Ticker', 'name': 'Descripción'}),
+                            on='Ticker',
+                            how='left'
+                        )
                         df_show['Seleccionado'] = df_show['Ticker'].apply(lambda x: '✅' if x in sel_data['tickers'] else '❌')
                         st.dataframe(df_show, use_container_width=True, hide_index=True)
                 st.markdown("**Log de Filtro Correlacional:**")
                 log_df = pd.DataFrame(sel_data['log'], columns=['Ticker', 'Estado', 'Max Corr', 'Par', 'Razón'])
+                log_df = log_df.merge(
+                    DF_UNIVERSO[['ticker', 'name']].rename(columns={'ticker': 'Ticker', 'name': 'Descripción'}),
+                    on='Ticker',
+                    how='left'
+                )
                 st.dataframe(log_df, use_container_width=True, hide_index=True)
 
     # --- OPERATIVA TAB 2: Órdenes de compra ---
@@ -667,6 +677,58 @@ if IS_OPERATIVA:
             st.plotly_chart(fig_bt, use_container_width=True)
 
         st.markdown("---")
+        st.markdown("#### 📊 Proyección de Capital — 1, 3 y 5 Años")
+        perfil_proy_op = st.selectbox(
+            "Selecciona un perfil para ver la proyección:",
+            list(resultados_perfiles.keys()),
+            index=list(resultados_perfiles.keys()).index(perfil_activo) if perfil_activo in resultados_perfiles else 0,
+            key="perfil_proy_operativa"
+        )
+        if perfil_proy_op in resultados_perfiles:
+            col_proy_op1, col_proy_op2 = st.columns(2)
+            pd_op = resultados_perfiles[perfil_proy_op]
+            cagr_op = pd_op['metricas']['CAGR']
+            vol_op = pd_op['metricas']['Vol']
+
+            with col_proy_op1:
+                bar_op_data = []
+                for pn, pd_d in resultados_perfiles.items():
+                    cg = pd_d['metricas']['CAGR']
+                    for yr in [1, 3, 5]:
+                        bar_op_data.append({"Perfil": pn, "Horizonte": f"{yr}Y", "Capital_USD": capital_usd*(1+cg)**yr})
+                fig_bop = px.bar(pd.DataFrame(bar_op_data), x="Horizonte", y="Capital_USD", color="Perfil",
+                    barmode="group", text_auto="$,.0f",
+                    color_discrete_map={pn: PERFILES[pn]['color'] for pn in PERFILES})
+                fig_bop.add_hline(y=capital_usd, line_dash="dot", line_color="gray")
+                fig_bop.update_layout(yaxis_title="Capital USD", height=400, margin=dict(t=20, b=20), yaxis_tickformat="$,.0f")
+                fig_bop.update_traces(textposition='outside', textfont_size=9)
+                st.plotly_chart(fig_bop, use_container_width=True)
+
+            with col_proy_op2:
+                meses_op = np.arange(0, 61)
+                cap_b = capital_usd * (1 + cagr_op) ** (meses_op / 12)
+                cap_u = capital_usd * (1 + cagr_op + vol_op) ** (meses_op / 12)
+                cap_l = capital_usd * (1 + max(cagr_op - vol_op, -0.99)) ** (meses_op / 12)
+                fig_top = go.Figure()
+                fig_top.add_trace(go.Scatter(x=meses_op/12, y=cap_u, mode='lines', line=dict(width=0), showlegend=False))
+                fig_top.add_trace(go.Scatter(x=meses_op/12, y=cap_l, mode='lines', line=dict(width=0),
+                    fill='tonexty', fillcolor=f'rgba({int(PERFILES[perfil_proy_op]["color"][1:3],16)},{int(PERFILES[perfil_proy_op]["color"][3:5],16)},{int(PERFILES[perfil_proy_op]["color"][5:7],16)},0.15)',
+                    showlegend=False))
+                fig_top.add_trace(go.Scatter(x=meses_op/12, y=cap_b, mode='lines',
+                    name=f'{perfil_proy_op} (CAGR {cagr_op*100:.1f}%)',
+                    line=dict(color=PERFILES[perfil_proy_op]['color'], width=3)))
+                for yr in [1, 3, 5]:
+                    cy = capital_usd * (1 + cagr_op)**yr
+                    fig_top.add_trace(go.Scatter(x=[yr], y=[cy], mode='markers+text',
+                        text=[f"Año {yr}: ${cy:,.0f}"], textposition='top center', textfont=dict(size=9),
+                        marker=dict(size=12, color=PERFILES[perfil_proy_op]['color'], symbol='diamond',
+                            line=dict(width=2, color='white')), showlegend=False))
+                fig_top.add_hline(y=capital_usd, line_dash="dot", line_color="gray")
+                fig_top.update_layout(xaxis_title="Años", yaxis_title="Capital USD", height=400,
+                    margin=dict(t=20, b=20), yaxis_tickformat="$,.0f")
+                st.plotly_chart(fig_top, use_container_width=True)
+
+        st.markdown("---")
         st.markdown("#### Drawdown Histórico por Perfil")
         fig_dd = go.Figure()
         for pn, pd_data in resultados_perfiles.items():
@@ -751,6 +813,96 @@ else:
                     "Retorno Total": f"{(cap_usd_g/capital_usd - 1)*100:+.1f}%"
                 })
         st.dataframe(pd.DataFrame(horizon_data), use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("#### 📊 Proyección Visual de Capital por Perfil")
+        perfil_proy_g = st.selectbox(
+            "Selecciona un perfil para ver la proyección detallada:",
+            list(resultados_perfiles.keys()),
+            index=list(resultados_perfiles.keys()).index(perfil_activo) if perfil_activo in resultados_perfiles else 0,
+            key="perfil_proy_gerencial"
+        )
+
+        col_proy_bar, col_proy_line = st.columns(2)
+        with col_proy_bar:
+            st.markdown("#### Comparativa de Perfiles — Capital a 1, 3 y 5 Años")
+            bar_proy_data = []
+            for pn, pd_data in resultados_perfiles.items():
+                cagr_bp = pd_data['metricas']['CAGR']
+                for anos in [1, 3, 5]:
+                    bar_proy_data.append({
+                        "Perfil": pn, "Horizonte": f"{anos}Y",
+                        "Capital_USD": capital_usd * (1 + cagr_bp)**anos,
+                        "Años": anos
+                    })
+            df_bar_proy = pd.DataFrame(bar_proy_data)
+            fig_bar_proy = px.bar(
+                df_bar_proy, x="Horizonte", y="Capital_USD", color="Perfil",
+                barmode="group", text_auto="$,.0f",
+                color_discrete_map={pn: PERFILES[pn]['color'] for pn in PERFILES}
+            )
+            fig_bar_proy.add_hline(y=capital_usd, line_dash="dot", line_color="gray",
+                annotation_text=f"Capital Inicial: ${capital_usd:,.0f}")
+            fig_bar_proy.update_layout(
+                yaxis_title="Capital USD", height=450, margin=dict(t=20, b=20),
+                yaxis_tickformat="$,.0f"
+            )
+            fig_bar_proy.update_traces(textposition='outside', textfont_size=10)
+            st.plotly_chart(fig_bar_proy, use_container_width=True)
+
+        with col_proy_line:
+            st.markdown(f"#### Trayectoria de Crecimiento — {perfil_proy_g}")
+            if perfil_proy_g in resultados_perfiles:
+                pd_sel = resultados_perfiles[perfil_proy_g]
+                cagr_sel = pd_sel['metricas']['CAGR']
+                vol_sel = pd_sel['metricas']['Vol']
+                meses = np.arange(0, 61)
+                cap_base = capital_usd * (1 + cagr_sel) ** (meses / 12)
+                cap_upper = capital_usd * (1 + cagr_sel + vol_sel) ** (meses / 12)
+                cap_lower = capital_usd * (1 + max(cagr_sel - vol_sel, -0.99)) ** (meses / 12)
+                fig_traj = go.Figure()
+                fig_traj.add_trace(go.Scatter(
+                    x=meses/12, y=cap_upper, mode='lines', name='Optimista (+1σ)',
+                    line=dict(width=0), showlegend=False))
+                fig_traj.add_trace(go.Scatter(
+                    x=meses/12, y=cap_lower, mode='lines', name='Pesimista (-1σ)',
+                    line=dict(width=0), fill='tonexty',
+                    fillcolor=f'rgba({int(PERFILES[perfil_proy_g]["color"][1:3],16)},{int(PERFILES[perfil_proy_g]["color"][3:5],16)},{int(PERFILES[perfil_proy_g]["color"][5:7],16)},0.15)',
+                    showlegend=False))
+                fig_traj.add_trace(go.Scatter(
+                    x=meses/12, y=cap_base, mode='lines', name=f'{perfil_proy_g} (CAGR {cagr_sel*100:.1f}%)',
+                    line=dict(color=PERFILES[perfil_proy_g]['color'], width=3)))
+                for yr in [1, 3, 5]:
+                    cap_yr = capital_usd * (1 + cagr_sel)**yr
+                    ganancia_yr = cap_yr - capital_usd
+                    fig_traj.add_trace(go.Scatter(
+                        x=[yr], y=[cap_yr], mode='markers+text',
+                        text=[f"Año {yr}\n${cap_yr:,.0f}\n(+${ganancia_yr:,.0f})"],
+                        textposition='top center', textfont=dict(size=10),
+                        marker=dict(size=14, color=PERFILES[perfil_proy_g]['color'],
+                            line=dict(width=2, color='white'), symbol='diamond'),
+                        showlegend=False))
+                fig_traj.add_hline(y=capital_usd, line_dash="dot", line_color="gray")
+                fig_traj.update_layout(
+                    xaxis_title="Años", yaxis_title="Capital USD",
+                    height=450, margin=dict(t=20, b=20),
+                    yaxis_tickformat="$,.0f"
+                )
+                st.plotly_chart(fig_traj, use_container_width=True)
+
+                col_p1, col_p3, col_p5 = st.columns(3)
+                for col_px, yr in zip([col_p1, col_p3, col_p5], [1, 3, 5]):
+                    cap_yr = capital_usd * (1 + cagr_sel)**yr
+                    gan_usd = cap_yr - capital_usd
+                    gan_pen = gan_usd * fx_rate
+                    ret_total = (cap_yr / capital_usd - 1) * 100
+                    with col_px:
+                        st.markdown(f'<div class="kpi-card">'
+                            f'<div class="kpi-title">Año {yr}</div>'
+                            f'<div class="kpi-value" style="color:{PERFILES[perfil_proy_g]["color"]};">'
+                            f'${cap_yr:,.0f}</div>'
+                            f'<div class="kpi-sub">+${gan_usd:,.0f} USD | S/ {gan_pen:,.0f} PEN | {ret_total:+.1f}%</div>'
+                            f'</div>', unsafe_allow_html=True)
 
         st.markdown("---")
         col_g1, col_g2 = st.columns(2)
